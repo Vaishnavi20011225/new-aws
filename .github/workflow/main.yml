@@ -1,0 +1,97 @@
+name: APPLICATION CICD AWS
+'on':
+  push:
+    branches:
+      - dev
+permissions:
+  id-token: write
+  contents: read
+env:
+  gitopsRepoName: confixa-org
+  organizationName: confixa
+  codeBaseOrganizationName: Vaishnavi20011225
+  codeBaseRepoName: a1111
+  email_id: vaishnavi.korgaonkar@wohlig.com
+  gitopsbranch: dev
+  projects: |
+    app-aws fn
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: code checkout
+        uses: actions/checkout@v2
+      - name: lowercase
+        run: >
+          lowercase_codeBaseOrganizationName=$(echo "${{
+          env.codeBaseOrganizationName }}" | tr '[:upper:]' '[:lower:]')
+
+          echo $lowercase_codeBaseOrganizationName
+
+          echo
+          "lowercase_codeBaseOrganizationName=$lowercase_codeBaseOrganizationName"
+          >> $GITHUB_ENV
+
+          lowercase_codeBaseRepoName=$(echo "${{ env.codeBaseRepoName }}" | tr
+          '[:upper:]' '[:lower:]')
+
+          echo $lowercase_codeBaseRepoName
+
+          echo "lowercase_codeBaseRepoName=$lowercase_codeBaseRepoName" >>
+          $GITHUB_ENV
+      - name: Cache Docker layers
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.docker
+          key: ${{ runner.os }}-docker-${{ hashFiles('**/Dockerfile') }}
+          restore-keys: |
+            ${{ runner.os }}-docker-
+      - name: aws configure
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.ACCESSKEYID }}
+          aws-secret-access-key: ${{ secrets.SECRETKEYID }}
+          aws-region: ${{ secrets.REGION }}
+      - name: Login to ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Build Docker image and push
+        run: |
+          docker build -t ${{ secrets.ARTIFACTREPO }}:${{ github.sha }} .
+          docker push ${{ secrets.ARTIFACTREPO }}:${{ github.sha }}
+      - name: Clone GitOps repository
+        run: >
+          git clone https://${{ secrets.GH_USER }}:${{ secrets.TOKEN
+          }}@github.com/${{ env.organizationName }}/${{ env.gitopsRepoName
+          }}.git
+
+          cd ${{ env.gitopsRepoName }}
+
+          git checkout ${{ env.gitopsbranch }}
+      - name: Update YAML files
+        run: |
+          cd ${{ env.gitopsRepoName }}
+          # Read projects from multi-line string and iterate over each line
+          echo "${{ env.projects }}" | while IFS= read -r project; do
+            projectName=$(echo "$project" | awk '{print $1}')
+            applicationName=$(echo "$project" | awk '{print $2}')
+            if [ -z "$projectName" ] || [ -z "$applicationName" ]; then
+              echo "Skipping invalid project: $project"
+              continue
+            fi
+            echo "Processing projectName: $projectName, applicationName: $applicationName"
+            yq e '.["'"${applicationName}"'"].image = "${{ secrets.ARTIFACTREPO }}:${{ github.sha }}"' -i "${projectName}/values.yaml"
+          done
+      - name: Commit and push changes
+        run: |
+          cd ${{ env.gitopsRepoName }}
+          git config user.name "${{ secrets.GH_USER }}"
+          git config user.email "${{ env.email_id }}"
+          git add .
+          git commit -m "Updating newer image"
+          git push --set-upstream origin ${{ env.gitopsbranch }}
+
+          # git add .
+          # git commit -m "update new image"
+          # git push --set-upstream origin ${{ env.gitopsbranch }}
